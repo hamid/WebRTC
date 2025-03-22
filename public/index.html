@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>WebRTC P2P Call</title>
+  <style>
+    video { width: 300px; margin: 10px; border: 1px solid black; }
+    ul { list-style: none; padding: 0; }
+    li { cursor: pointer; margin-bottom: 5px; }
+  </style>
+</head>
+<body>
+  <h2>1. Login</h2>
+  <input id="username" placeholder="Enter your name" />
+  <button onclick="login()">Login</button>
+
+  <h2>2. Online Users</h2>
+  <ul id="users"></ul>
+
+  <h2>3. Video</h2>
+  <video id="localVideo" autoplay muted></video>
+  <video id="remoteVideo" autoplay></video>
+
+  <script>
+    let socket;
+    let username;
+    let peerConnection;
+    let localStream;
+    let remoteStream;
+
+    const config = {
+      iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+    };
+
+    // Step 1: Login with a username and connect WebSocket
+    function login() {
+      username = document.getElementById("username").value;
+      if (!username) return alert("Please enter a username");
+
+      socket = new WebSocket("ws://" + window.location.host);
+
+      socket.onopen = () => {
+        console.log("[Step 1] WebSocket connected, sending login");
+        socket.send(JSON.stringify({ type: "login", username }));
+      };
+
+      socket.onmessage = async (message) => {
+        const data = JSON.parse(message.data);
+        console.log("[Step 2] Message received:", data);
+
+        switch (data.type) {
+          case "users":
+            updateUsersList(data.users);
+            break;
+          case "offer":
+            await handleOffer(data);
+            break;
+          case "answer":
+            console.log("[Step 4] Caller received answer");
+            await peerConnection.setRemoteDescription(new RTCSessionDescription(data.answer));
+            break;
+          case "candidate":
+            console.log("[Step 4] Adding ICE candidate");
+            await peerConnection.addIceCandidate(new RTCIceCandidate(data.candidate));
+            break;
+        }
+      };
+    }
+
+    function updateUsersList(users) {
+      const ul = document.getElementById("users");
+      ul.innerHTML = "";
+      users.filter(u => u !== username).forEach(user => {
+        const li = document.createElement("li");
+        li.textContent = user;
+        li.onclick = () => startCall(user);
+        ul.appendChild(li);
+      });
+    }
+
+    // Step 3: Start a call
+    async function startCall(target) {
+      console.log("[Step 3] Starting call to", target);
+
+      localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+      document.getElementById("localVideo").srcObject = localStream;
+
+      peerConnection = new RTCPeerConnection(config);
+
+      remoteStream = new MediaStream();
+      document.getElementById("remoteVideo").srcObject = remoteStream;
+
+      peerConnection.ontrack = (event) => {
+        console.log("[Step 4] Caller received remote track");
+        remoteStream.addTrack(event.track);
+      };
+
+      peerConnection.onicecandidate = (event) => {
+        if (event.candidate) {
+          console.log("[Step 4] Caller sending ICE candidate");
+          socket.send(JSON.stringify({ type: "candidate", target, candidate: event.candidate }));
+        }
+      };
+
+      localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
+
+      const offer = await peerConnection.createOffer();
+      await peerConnection.setLocalDescription(offer);
+      socket.send(JSON.stringify({ type: "offer", target, offer }));
+      console.log("[Step 3] Caller sent offer");
+    }
+
+    // Handle incoming offer
+    async function handleOffer(data) {
+      const target = data.from;
+      console.log("[Step 3] Callee received offer from", target);
+
+      localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+      document.getElementById("localVideo").srcObject = localStream;
+
+      peerConnection = new RTCPeerConnection(config);
+
+      remoteStream = new MediaStream();
+      document.getElementById("remoteVideo").srcObject = remoteStream;
+
+      peerConnection.ontrack = (event) => {
+        console.log("[Step 4] Callee received remote track");
+        remoteStream.addTrack(event.track);
+      };
+
+      peerConnection.onicecandidate = (event) => {
+        if (event.candidate) {
+          console.log("[Step 4] Callee sending ICE candidate");
+          socket.send(JSON.stringify({ type: "candidate", target, candidate: event.candidate }));
+        }
+      };
+
+      await peerConnection.setRemoteDescription(new RTCSessionDescription(data.offer));
+
+      localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
+
+      const answer = await peerConnection.createAnswer();
+      await peerConnection.setLocalDescription(answer);
+      socket.send(JSON.stringify({ type: "answer", target, answer }));
+      console.log("[Step 3] Callee sent answer");
+    }
+  </script>
+</body>
+</html>

@@ -1,0 +1,12 @@
+version: '3'
+services:
+  webrtc-app:
+    build: .
+    ports:
+      - "3000:3000"
+    volumes:
+      - .:/app
+    working_dir: /app
+    command: node server.js
+    environment:
+      - NODE_ENV=production
